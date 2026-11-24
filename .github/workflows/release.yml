@@ -1,0 +1,42 @@
+name: Publish verified DSH bundle
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: dsh-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the tagged source and publish the install archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git init -q source
+          cd source
+          git fetch --quiet --no-tags "https://github.com/$GITHUB_REPOSITORY.git" \
+            'refs/heads/main:refs/remotes/origin/main' "$GITHUB_REF:$GITHUB_REF"
+          git checkout -q --detach "$GITHUB_REF"
+          [[ "$(git rev-parse HEAD)" == "$(git rev-parse --verify "$GITHUB_SHA^{commit}")" ]]
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          [[ "v$(jq -er .version package.json)" == "$GITHUB_REF_NAME" ]]
+          node --test test/client.test.js test/server.test.js
+          python3 tools/verify_release.py
+          name=dsh-bundle-docker-upgrade.tgz
+          cp "releases/dsh-bundle-docker-upgrade-${GITHUB_REF_NAME#v}.tgz" "$name"
+          sha256sum "$name" > "$name.sha256"
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$GITHUB_REF_NAME" --notes 'DSH Docker upgrade settings bundle and SHA-256 checksum.' "$name" "$name.sha256"
+          fi
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir verify \
+            --pattern "$name" --pattern "$name.sha256"
+          cmp "$name" "verify/$name"
+          cmp "$name.sha256" "verify/$name.sha256"

@@ -1,0 +1,4 @@
+- insert:
+    - id: docker-upgrade
+      name: dsh-bundle-docker-upgrade
+      inject: [webServer, connection, agents, profileContext]
