@@ -7,7 +7,7 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "dsh-bundle-docker-upgrade"
-FILES = {"package.json", "index.js", "client.js", "cordis.patch.yml", "README.md"}
+FILES = {"package.json", "index.js", "client.js", "portable-control.js", "portable-inventory.js", "ssh-idle.js", "cordis.patch.yml", "README.md"}
 
 
 def verify():

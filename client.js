@@ -3,6 +3,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
+    const installer = 'https://github.com/compilink/dsh-docker-upgrade-plugin/releases/download/v0.2.0/DSH-Docker-Updater-macOS.zip'
     const labels = {
       idle: '尚未执行', checking: '正在检查远程源码', building: '正在构建 Docker 镜像',
       validating: '正在验证候选版本', 'backing-up': '正在备份数据', deploying: '正在部署容器',
@@ -15,7 +16,11 @@ window.__ModuleLoader__.load({
         headers: revision ? { 'X-DSH-Upgrade-Revision': revision } : {},
       })
       const result = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(result.error || '暂时无法连接 DSH，将自动重试')
+      if (!response.ok) {
+        const error = new Error(result.error || ([401, 403].includes(response.status) ? '请在本机以 DSH 所有者身份登录。' : '暂时无法连接 DSH，将自动重试'))
+        error.status = response.status
+        throw error
+      }
       return result
     }
 
@@ -50,6 +55,7 @@ window.__ModuleLoader__.load({
           } catch (err) {
             if (lifetime.signal.aborted || n !== poll) return
             setConnected(false)
+            if (err.status === 401 || err.status === 403) setState(null)
             setConnectionError(err instanceof TypeError || err.name === 'TimeoutError' ? '暂时无法连接 DSH，正在重连。' : err.message)
           }
         }
@@ -83,9 +89,16 @@ window.__ModuleLoader__.load({
         }
       }
       const status = state?.status
+      const mountNames = { bind: 'Mac 上的目录', volume: 'Docker 命名卷' }
       const unavailable = !connected || !state?.workerOnline || state.busy || posting
       return h('section', { style: { maxWidth: '42rem', padding: '1rem', display: 'grid', gap: '0.75rem' } },
         h('h2', null, 'DSH Docker 升级'),
+        state?.mounts && h('p', null, '跟踪 DeepSeek Harness 官方 GitHub 默认分支。DSH 数据使用' +
+          mountNames[state.mounts.data] + '，工作区使用' + mountNames[state.mounts.workspace] + '。'),
+        connected && state?.workerState === 'missing' && h('div', null,
+          h('p', null, '尚未检测到宿主升级服务。在运行 Docker Desktop 的 Mac 上下载安装包，解压后双击安装器，确认它识别出的 DSH 部署。'),
+          h('a', { href: installer, download: '', target: '_blank', rel: 'noopener noreferrer' }, '安装 Mac 宿主升级服务'),
+          h('p', null, '安装完成后，本页会自动显示服务状态。')),
         state?.scheduleTime && h('p', null, '宿主机每天 ' + state.scheduleTime + ' 检查并自动部署更新' +
           (state.nextCheckAt ? '。下次检查 ' + new Date(state.nextCheckAt).toLocaleString() : '')),
         h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '0.5rem' } },
@@ -93,7 +106,10 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', disabled: unavailable || !!state?.blocker, onClick: () => submit('run') }, '立即升级')),
         h('div', { role: 'status', 'aria-live': 'polite' },
           !connected && h('p', null, connectionError || '正在连接本机 DSH。'),
-          connected && !state?.workerOnline && h('p', null, '宿主机升级服务未就绪，请检查服务状态。'),
+          connected && state?.workerState === 'online' && h('p', null, '宿主升级服务已连接。'),
+          connected && state?.workerState === 'stale' && h('p', null, '已检测到宿主服务的运行记录，但尚未收到新的心跳。请确认 Docker 主机已唤醒、服务正在运行。'),
+          connected && state?.workerState === 'blocked' && h('p', null, '宿主升级服务已连接，当前暂停处理请求。请查看下方执行结果。'),
+          connected && !state?.workerState && !state?.workerOnline && h('p', null, '宿主机升级服务未就绪，请检查服务状态。'),
           state?.pending && h('p', null, state.pending === 'upgrade' ? '升级请求已提交，等待宿主机处理。' : '检查请求已提交，等待宿主机处理。'),
           state?.blocker && h('p', null, state.blocker),
           status && h('div', null,

@@ -1,6 +1,6 @@
 {
   "name": "dsh-bundle-docker-upgrade",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Check upstream DSH source and deploy an update through the local Docker host.",
   "displayName": "DSH Docker 升级",
@@ -13,6 +13,6 @@
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-settings"] }
   },
-  "files": ["index.js", "client.js", "cordis.patch.yml", "README.md"],
+  "files": ["index.js", "client.js", "portable-control.js", "portable-inventory.js", "ssh-idle.js", "cordis.patch.yml", "README.md"],
   "scripts": { "test": "node --test" }
 }

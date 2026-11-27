@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -43,15 +43,18 @@ function fixture(t) {
 test('indicates host availability and schedule without provisioning a queue', t => {
   const f = fixture(t)
   assert.equal(f.request().body.workerOnline, false)
+  assert.equal(f.request().body.workerState, 'missing')
   assert.equal(f.request('check', 'POST', f.auth()).status, 503)
   assert.equal(existsSync(f.dir), false)
   f.online()
   const { body } = f.request()
   assert.equal(body.workerOnline, true)
+  assert.equal(body.workerState, 'online')
   assert.equal(body.scheduleTime, '04:00')
   assert.equal(body.nextCheckAt, '2030-07-11T20:00:00.000Z')
   f.save('worker.json', { updatedAt: new Date(Date.now() - 125000).toISOString() })
   assert.equal(f.request().body.workerOnline, false)
+  assert.equal(f.request().body.workerState, 'stale')
 })
 
 test('admits only the local owner, rejects cross-origin requests and foreign arguments', t => {
@@ -60,7 +63,7 @@ test('admits only the local owner, rejects cross-origin requests and foreign arg
   const auth = f.auth()
   assert.equal(f.request('status', 'GET', { cookie: '' }).status, 401)
   for (const hdr of [
-    { host: 'elsewhere.example:3080' }, { origin: 'https://localhost:3080' },
+    { host: 'elsewhere.example:3080' }, { host: 'localhost:99999' }, { origin: 'https://localhost:3080' },
     { forwarded: 'for=127.0.0.1' }, { 'x-forwarded-prefix': '/dsh' },
   ]) assert.equal(f.request('status', 'GET', hdr).status, 403)
   assert.equal(f.request('run', 'POST').status, 403)
@@ -128,7 +131,10 @@ test('preserves a running scheduled job across a stale heartbeat, and a recovery
   f.online()
   f.save('status.json', { ...job, phase: 'blocked', requestId: null, action: null, message: '恢复失败' })
   assert.equal(f.request().body.status.message, '恢复失败')
+  assert.equal(f.request().body.workerState, 'blocked')
   assert.equal(f.request('run', 'POST', f.auth()).status, 503)
+  unlinkSync(join(f.dir, 'worker.json'))
+  assert.equal(f.request().body.workerState, 'stale')
 })
 
 test('rejects malformed and linked queue state without reading paths from requests', t => {
@@ -158,6 +164,34 @@ test('new DSH token scopes distinguish the browser from API and in-process owner
   }
   f.ctx.connection.admit = () => ({rejection:401})
   assert.equal(f.request().status,401)
+})
+
+test('stock token authentication verifies the single signed browser cookie against the admitted peer', t => {
+  const f = fixture(t)
+  const browser = { principal: { kind: 'owner' } }
+  const api = { principal: { kind: 'owner' } }
+  const host = 'localhost:3080'
+  const name = 'dsh-auth-' + createHash('sha256').update(host).digest('base64url')
+  const cookie = name + '=v1.signed-browser'
+  const auth = { authenticate({ headers }) {
+    assert.deepEqual(Object.keys(headers).sort(), ['cookie', 'host'])
+    return headers.cookie === cookie && headers.host === host ? { peer: browser } : { rejection: 401 }
+  } }
+  f.ctx.get = key => key === 'connection.authentication' ? auth : undefined
+  f.ctx.connection.admit = () => ({ peer: browser })
+  f.online()
+  const valid = { cookie, origin: 'http://' + host }
+  assert.equal(f.request('status', 'GET', { ...valid, authorization: 'Bearer other' }).status, 200)
+  for (const invalid of ['', name + '=v2.signed-api', name + '=v1.invalid', cookie + '; ' + cookie]) {
+    assert.equal(f.request('status', 'GET', { cookie: invalid }).status, 403)
+  }
+  const revision = f.request('status', 'GET', valid).body.revision
+  for (const peer of [api, f.ctx.connection.browserPeer]) {
+    f.ctx.connection.admit = () => ({ peer })
+    assert.equal(f.request('run', 'POST', { ...valid, 'x-dsh-upgrade-revision': revision }).status, 403)
+  }
+  f.ctx.connection.admit = () => ({ peer: browser })
+  assert.equal(f.request('check', 'POST', { ...valid, 'x-dsh-upgrade-revision': revision }).status, 202)
 })
 
 test('mounts management routes under the authentication service on a scoped host', t => {

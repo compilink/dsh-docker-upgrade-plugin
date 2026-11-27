@@ -40,16 +40,22 @@ jobs:
           fi
           git merge-base --is-ancestor HEAD refs/remotes/origin/main
           [[ "v$(jq -er .version package.json)" == "$tag" ]]
-          node --test test/client.test.js test/server.test.js
+          node --test test/*.test.js
+          python3 -B -m unittest discover -s test -p 'test_*.py'
           python3 tools/verify_release.py
           name=dsh-bundle-docker-upgrade.tgz
           cp "releases/dsh-bundle-docker-upgrade-${tag#v}.tgz" "$name"
           sha256sum "$name" > "$name.sha256"
+          mac=DSH-Docker-Updater-macOS.zip
+          python3 -B tools/package_macos.py "$mac"
+          sha256sum "$mac" > "$mac.sha256"
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag \
-              --title "$tag" --notes 'DSH Docker upgrade settings bundle and SHA-256 checksum.' "$name" "$name.sha256"
+              --title "$tag" --notes 'DSH Docker upgrade plugin, macOS host installer and SHA-256 checksums.' "$name" "$name.sha256" "$mac" "$mac.sha256"
           fi
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir verify \
-            --pattern "$name" --pattern "$name.sha256"
+            --pattern "$name" --pattern "$name.sha256" --pattern "$mac" --pattern "$mac.sha256"
           cmp "$name" "verify/$name"
           cmp "$name.sha256" "verify/$name.sha256"
+          cmp "$mac" "verify/$mac"
+          cmp "$mac.sha256" "verify/$mac.sha256"
